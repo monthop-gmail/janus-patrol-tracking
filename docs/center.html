@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Patrol — ศูนย์บัญชาการ</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; display: flex; height: 100vh; background: #111; color: #eee; }
+    #sidebar { width: 320px; background: #1a1a1a; overflow-y: auto; border-right: 1px solid #333; }
+    #sidebar h2 { padding: 16px; font-size: 16px; border-bottom: 1px solid #333; }
+    .soldier-item { padding: 12px 16px; border-bottom: 1px solid #222; cursor: pointer; }
+    .soldier-item:hover { background: #252525; }
+    .soldier-item .callsign { font-weight: bold; font-size: 15px; }
+    .soldier-item .coords { font-size: 12px; color: #888; margin-top: 4px; }
+    .soldier-item .status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .online { background: #2a7; }
+    .offline { background: #a33; }
+    #map-container { flex: 1; position: relative; min-height: 0; }
+    #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+    /* Video popup */
+    #video-panel { display: none; position: absolute; bottom: 16px; right: 16px; width: 420px; background: #1a1a1a; border-radius: 8px; overflow: hidden; z-index: 1000; box-shadow: 0 4px 20px rgba(0,0,0,.6); }
+    #video-panel .header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #252525; }
+    #video-panel .header span { font-weight: bold; }
+    #video-panel .close-btn { background: none; border: none; color: #eee; font-size: 20px; cursor: pointer; }
+    #video-panel video { width: 100%; background: #000; }
+    #track-btn { margin: 8px 12px 12px; padding: 6px 14px; background: #2a7; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h2>ทหารลาดตระเวน <span id="online-count">(0)</span></h2>
+  <div id="soldier-list"></div>
+</div>
+
+<div id="map-container">
+  <div id="map"></div>
+  <div id="video-panel">
+    <div class="header">
+      <span id="video-title">—</span>
+      <button class="close-btn" onclick="closeVideo()">✕</button>
+    </div>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <button id="track-btn" onclick="showTrack()">แสดงเส้นทาง</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const JANUS_WS = `ws://${location.hostname}:8188`;
+const JANUS_ROOM = 1234;
+
+/* ====== Map ====== */
+const map = L.map("map").setView([13.75, 100.5], 6);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "© OpenStreetMap"
+}).addTo(map);
+
+const soldiers = {};    // soldierId → { marker, data, ... }
+let trackLine = null;
+let selectedSoldierId = null;
+
+/* ====== Socket.IO ====== */
+const socket = io();
+
+socket.on("connect", () => console.log("center connected"));
+
+// ทหารส่งตำแหน่ง
+socket.on("soldier:position", (data) => {
+  const { soldierId, callsign, lat, lng, accuracy } = data;
+  if (!soldiers[soldierId]) {
+    soldiers[soldierId] = { data: { ...data, is_online: true }, marker: null };
+  }
+  soldiers[soldierId].data = { ...soldiers[soldierId].data, ...data, is_online: true };
+  if (!soldiers[soldierId].marker) {
+    soldiers[soldierId].marker = L.marker([lat, lng]).addTo(map)
+      .bindTooltip(callsign, { permanent: true, direction: "top", offset: [0, -10] });
+    soldiers[soldierId].marker.on("click", () => selectSoldier(soldierId));
+  } else {
+    soldiers[soldierId].marker.setLatLng([lat, lng]);
+  }
+  updateSidebar();
+});
+
+// ทหาร online
+socket.on("soldier:online", (s) => {
+  if (soldiers[s.id]) soldiers[s.id].data.is_online = true;
+  updateSidebar();
+});
+
+// ทหาร offline
+socket.on("soldier:offline", ({ soldierId }) => {
+  if (soldiers[soldierId]) {
+    soldiers[soldierId].data.is_online = false;
+    updateSidebar();
+  }
+});
+
+// feed update
+socket.on("soldier:feed_update", ({ soldierId, feedId }) => {
+  if (soldiers[soldierId]) soldiers[soldierId].data.janus_feed = feedId;
+});
+
+// โหลดทหารที่ online อยู่แล้ว
+fetch("/api/soldiers?online=true").then(r => r.json()).then(list => {
+  list.forEach(s => {
+    // จะถูกอัพเดทเมื่อได้รับ GPS
+    soldiers[s.id] = soldiers[s.id] || {
+      data: s,
+      marker: null,
+    };
+  });
+  updateSidebar();
+});
+
+/* ====== Sidebar ====== */
+function updateSidebar() {
+  const list = document.getElementById("soldier-list");
+  const entries = Object.entries(soldiers).filter(([, v]) => v.data);
+  document.getElementById("online-count").textContent = `(${entries.filter(([,v]) => v.data.is_online).length})`;
+
+  list.innerHTML = entries.map(([id, v]) => {
+    const d = v.data;
+    const on = d.is_online;
+    return `<div class="soldier-item" onclick="selectSoldier(${id})">
+      <span class="status ${on ? 'online' : 'offline'}"></span>
+      <span class="callsign">${d.callsign || 'Unknown'}</span>
+      <div class="coords">${d.lat ? `${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}` : 'ยังไม่มีตำแหน่ง'}</div>
+    </div>`;
+  }).join("");
+}
+
+/* ====== Select Soldier → show video ====== */
+function selectSoldier(soldierId) {
+  const s = soldiers[soldierId];
+  if (!s) return;
+  selectedSoldierId = soldierId;
+
+  // Pan map
+  if (s.marker) map.setView(s.marker.getLatLng(), 15);
+
+  // ลบ track เดิม
+  if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+
+  // แสดง video panel
+  document.getElementById("video-title").textContent = s.data.callsign;
+  document.getElementById("video-panel").style.display = "block";
+  document.getElementById("remoteVideo").srcObject = null;
+
+  // Subscribe Janus VideoRoom
+  const feedId = s.data.janus_feed;
+  if (feedId) {
+    subscribeToFeed(feedId);
+  } else {
+    console.log("ยังไม่มี feed สำหรับทหารนี้");
+  }
+}
+
+function closeVideo() {
+  document.getElementById("video-panel").style.display = "none";
+  document.getElementById("remoteVideo").srcObject = null;
+  selectedSoldierId = null;
+  cleanupSubscriber();
+}
+
+/* ====== Track ย้อนหลัง ====== */
+async function showTrack() {
+  if (!selectedSoldierId) return;
+  if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+  const resp = await fetch(`/api/soldiers/${selectedSoldierId}/track?limit=1000`);
+  const points = await resp.json();
+  if (points.length === 0) return alert("ยังไม่มีข้อมูลเส้นทาง");
+  const latlngs = points.map(p => [p.lat, p.lng]);
+  trackLine = L.polyline(latlngs, { color: "#f80", weight: 3 }).addTo(map);
+  map.fitBounds(trackLine.getBounds(), { padding: [40, 40] });
+}
+
+/* ====== Janus VideoRoom Subscriber ====== */
+let subWs, subSessionId, subHandleId, subPc;
+
+function cleanupSubscriber() {
+  if (subPc) { subPc.close(); subPc = null; }
+  if (subWs && subWs.readyState === WebSocket.OPEN) {
+    if (subSessionId) {
+      subWs.send(JSON.stringify({ janus: "destroy", session_id: subSessionId, transaction: "destroy" }));
+    }
+    subWs.close();
+  }
+  subSessionId = null; subHandleId = null; subWs = null;
+}
+
+function subscribeToFeed(feedId) {
+  cleanupSubscriber();
+  subWs = new WebSocket(JANUS_WS, "janus-protocol");
+  const txn = () => "t" + Math.random().toString(36).slice(2);
+
+  subWs.onopen = () => {
+    subWs.send(JSON.stringify({ janus: "create", transaction: txn() }));
+  };
+
+  subWs.onmessage = async (evt) => {
+    const msg = JSON.parse(evt.data);
+
+    // Session created
+    if (msg.janus === "success" && !subSessionId && msg.data?.id) {
+      subSessionId = msg.data.id;
+      subWs.send(JSON.stringify({
+        janus: "attach", plugin: "janus.plugin.videoroom",
+        session_id: subSessionId, transaction: txn()
+      }));
+      setInterval(() => {
+        if (subWs.readyState === WebSocket.OPEN)
+          subWs.send(JSON.stringify({ janus: "keepalive", session_id: subSessionId, transaction: txn() }));
+      }, 25000);
+      return;
+    }
+
+    // Handle attached
+    if (msg.janus === "success" && msg.data?.id && !subHandleId) {
+      subHandleId = msg.data.id;
+      subWs.send(JSON.stringify({
+        janus: "message", session_id: subSessionId, handle_id: subHandleId,
+        transaction: txn(),
+        body: {
+          request: "join", room: JANUS_ROOM, ptype: "subscriber",
+          streams: [{ feed: feedId }]
+        }
+      }));
+      return;
+    }
+
+    // Offer from Janus (subscriber receives offer)
+    if (msg.jsep && msg.jsep.type === "offer") {
+      subPc = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: `turn:${location.hostname}:3478`, username: "janus", credential: "januspass" }
+        ]
+      });
+
+      subPc.ontrack = (e) => {
+        document.getElementById("remoteVideo").srcObject = e.streams[0];
+      };
+
+      subPc.onicecandidate = (e) => {
+        if (e.candidate) {
+          subWs.send(JSON.stringify({
+            janus: "trickle", session_id: subSessionId, handle_id: subHandleId,
+            transaction: txn(), candidate: e.candidate
+          }));
+        } else {
+          subWs.send(JSON.stringify({
+            janus: "trickle", session_id: subSessionId, handle_id: subHandleId,
+            transaction: txn(), candidate: { completed: true }
+          }));
+        }
+      };
+
+      await subPc.setRemoteDescription(msg.jsep);
+      const answer = await subPc.createAnswer();
+      await subPc.setLocalDescription(answer);
+
+      subWs.send(JSON.stringify({
+        janus: "message", session_id: subSessionId, handle_id: subHandleId,
+        transaction: txn(),
+        body: { request: "start" },
+        jsep: { type: "answer", sdp: answer.sdp }
+      }));
+    }
+  };
+
+  subWs.onerror = (err) => console.error("Sub WS error", err);
+}
+</script>
+</body>
+</html>

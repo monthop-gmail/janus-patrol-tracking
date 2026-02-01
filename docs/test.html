@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mobile WebRTC Streaming</title>
+</head>
+<body>
+
+<video id="localVideo" autoplay playsinline muted></video>
+<button onclick="start()">Start Streaming</button>
+
+<script>
+let stream;
+let pc;
+let ws;
+
+/* ====== CONFIG URL ====== */
+const SIGNALING_URL = `ws://${location.hostname}:8188`;   // ⭐ URL ปลายทาง WebRTC
+const LOCATION_URL  = `${location.origin}/location`;
+
+/* ====== START ====== */
+async function start() {
+
+  // 1) เปิดกล้อง
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment" },
+    audio: true
+  });
+  document.getElementById("localVideo").srcObject = stream;
+
+  // 2) ส่ง GPS
+  navigator.geolocation.watchPosition(pos => {
+    sendLocation({
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracy: pos.coords.accuracy
+    });
+  }, console.error, { enableHighAccuracy: true });
+
+  // 3) ต่อ WebRTC
+  startWebRTC();
+}
+
+/* ====== SEND LOCATION ====== */
+function sendLocation(loc){
+  fetch(LOCATION_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(loc)
+  });
+}
+
+/* ====== WEBRTC ====== */
+function startWebRTC(){
+
+  pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "turn:" + location.hostname + ":3478", username: "janus", credential: "januspass" }
+    ]
+  });
+
+  // ใส่ track กล้อง
+  stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+  // WebSocket Signaling
+  ws = new WebSocket(SIGNALING_URL);
+
+  ws.onopen = async () => {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    ws.send(JSON.stringify({
+      type: "offer",
+      sdp: offer.sdp
+    }));
+  };
+
+  ws.onmessage = async (msg) => {
+    const data = JSON.parse(msg.data);
+
+    if (data.type === "answer") {
+      await pc.setRemoteDescription({
+        type: "answer",
+        sdp: data.sdp
+      });
+    }
+
+    if (data.type === "candidate") {
+      await pc.addIceCandidate(data.candidate);
+    }
+  };
+
+  pc.onicecandidate = e => {
+    if (e.candidate) {
+      ws.send(JSON.stringify({
+        type: "candidate",
+        candidate: e.candidate
+      }));
+    }
+  };
+}
+</script>
+
+</body>
+</html>

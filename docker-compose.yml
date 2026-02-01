@@ -1,0 +1,73 @@
+services:
+  janus:
+    image: canyan/janus-gateway:latest
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./janus/janus.jcfg:/usr/local/etc/janus/janus.jcfg
+      - ./janus/janus.transport.websockets.jcfg:/usr/local/etc/janus/janus.transport.websockets.jcfg
+      - ./janus/janus.plugin.streaming.jcfg:/usr/local/etc/janus/janus.plugin.streaming.jcfg
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment:
+      - DB_HOST=postgres
+      - DB_NAME=patrol
+      - DB_USER=patrol
+      - DB_PASS=patrol123
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - janus-net
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: patrol
+      POSTGRES_USER: patrol
+      POSTGRES_PASSWORD: patrol123
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U patrol"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    networks:
+      - janus-net
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docs:/usr/share/nginx/html:ro
+    depends_on:
+      - janus
+      - api
+    networks:
+      - janus-net
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49152-49200:49152-49200/udp"
+    volumes:
+      - ./coturn/turnserver.conf:/etc/turnserver.conf:ro
+    networks:
+      - janus-net
+
+volumes:
+  pgdata:
+
+networks:
+  janus-net:
+    driver: bridge

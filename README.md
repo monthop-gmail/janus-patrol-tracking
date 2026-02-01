@@ -1,0 +1,135 @@
+# Janus Patrol Tracking System
+
+ระบบติดตามการลาดตระเวน Real-time — ทหารส่ง Live Video + GPS จากมือถือ มายังศูนย์บัญชาการผ่าน WebRTC
+
+## สถาปัตยกรรม
+
+```
+[ทหาร A/B/C มือถือ] ──WebRTC publish──▶ [Janus VideoRoom]
+        │                                       │
+        │ GPS (Socket.IO)               subscribe│
+        ▼                                       ▼
+   [Node.js API] ──save──▶ [PostgreSQL]    [Center Dashboard]
+        │                                  ├── แผนที่ Leaflet + markers
+        │ Socket.IO broadcast             └── Live Video popup
+        └──────────────────────────────────────▶
+
+┌──────────────────────────────────────────────────────┐
+│                   Docker Compose                     │
+│                                                      │
+│  ┌────────┐ ┌────────┐ ┌──────┐ ┌────────┐ ┌──────┐ │
+│  │ Janus* │ │ API    │ │Nginx │ │Postgres│ │Coturn│ │
+│  │ :8188  │ │ :3000  │ │ :80  │ │ :5432  │ │:3478 │ │
+│  └────────┘ └────────┘ └──────┘ └────────┘ └──────┘ │
+│  * host network                                      │
+└──────────────────────────────────────────────────────┘
+```
+
+## Services
+
+| Service | Image | หน้าที่ |
+|---------|-------|---------|
+| **janus** | `canyan/janus-gateway` (host network) | WebRTC media server — VideoRoom plugin |
+| **api** | Node.js (Express + Socket.IO) | REST API + real-time GPS relay + บันทึกลง DB |
+| **postgres** | `postgres:16-alpine` | เก็บข้อมูลทหาร + GPS history ย้อนหลัง |
+| **nginx** | `nginx:alpine` | Serve web client + reverse proxy |
+| **coturn** | `coturn/coturn` | TURN server สำหรับ NAT traversal |
+
+## Quick Start
+
+```bash
+docker compose up -d --build
+```
+
+## หน้าเว็บ
+
+| URL | หน้าที่ |
+|-----|---------|
+| `http://localhost/` | ศูนย์บัญชาการ (center.html) |
+| `http://localhost/center.html` | แผนที่รวม + ดู live video ทหารแต่ละคน |
+| `http://localhost/soldier.html` | หน้าทหาร — ส่ง live video + GPS จากมือถือ |
+
+## วิธีใช้งาน
+
+### ทหาร (มือถือ)
+1. เปิด `http://<SERVER_IP>/soldier.html` บนมือถือ
+2. ใส่ Callsign (เช่น Alpha-1) แล้วกด **เริ่มส่งสัญญาณ**
+3. อนุญาตกล้อง + GPS → ระบบจะส่ง live video และตำแหน่งอัตโนมัติ
+
+### ศูนย์บัญชาการ
+1. เปิด `http://<SERVER_IP>/center.html`
+2. เห็น marker ทหารแต่ละคนบนแผนที่ (อัพเดท real-time)
+3. กดที่ marker → ดู live video ของทหารคนนั้น
+4. กด **แสดงเส้นทาง** → ดู track ย้อนหลังบนแผนที่
+
+## API Endpoints
+
+| Method | URL | รายละเอียด |
+|--------|-----|------------|
+| `POST` | `/api/soldiers` | ลงทะเบียนทหาร `{ callsign, name }` |
+| `GET` | `/api/soldiers` | รายชื่อทหารทั้งหมด (`?online=true` เฉพาะ online) |
+| `GET` | `/api/soldiers/:id/track` | GPS history ย้อนหลัง (`?limit=500`) |
+
+## Socket.IO Events
+
+| Event | ทิศทาง | ข้อมูล |
+|-------|--------|--------|
+| `soldier:join` | ทหาร → API | `{ callsign, name, janusFeed }` |
+| `soldier:gps` | ทหาร → API | `{ lat, lng, accuracy }` |
+| `soldier:feed` | ทหาร → API | `{ feedId }` (Janus VideoRoom feed ID) |
+| `soldier:position` | API → ทุกคน | `{ soldierId, callsign, lat, lng, accuracy }` |
+| `soldier:online` | API → ทุกคน | ทหารเข้าระบบ |
+| `soldier:offline` | API → ทุกคน | ทหารออกจากระบบ |
+
+## โครงสร้างไฟล์
+
+```
+├── docker-compose.yml
+├── api/
+│   ├── Dockerfile
+│   ├── package.json
+│   ├── server.js              # Express + Socket.IO server
+│   └── db.js                  # PostgreSQL connection + schema
+├── janus/
+│   ├── janus.jcfg             # Config หลัก (NAT/TURN)
+│   ├── janus.transport.websockets.jcfg
+│   └── janus.plugin.streaming.jcfg
+├── nginx/
+│   └── nginx.conf             # Proxy: /api, /socket.io, /janus, /ws
+├── coturn/
+│   └── turnserver.conf
+└── docs/
+    ├── center.html            # ศูนย์บัญชาการ (แผนที่ + video)
+    ├── soldier.html           # หน้าทหาร (ส่ง video + GPS)
+    └── test.html              # ทดสอบ WebRTC พื้นฐาน
+```
+
+## Configuration
+
+### TURN Server Credentials
+
+| Key | Value |
+|-----|-------|
+| Username | `janus` |
+| Password | `januspass` |
+
+ต้องตรงกัน 3 ที่: `coturn/turnserver.conf`, `janus/janus.jcfg`, และ iceServers ใน HTML files
+
+### Janus Network
+
+Janus ใช้ `network_mode: host` เพื่อให้ ICE candidates เป็น host IP ตรงๆ (แก้ปัญหา ICE failed ใน Docker bridge network)
+
+### ส่ง Stream ด้วย FFmpeg (เสริม)
+
+```bash
+ffmpeg -re -i input.mp4 \
+  -c:v libx264 -preset veryfast -tune zerolatency \
+  -f rtp rtp://localhost:5004
+```
+
+## Latency
+
+| แบบ | Latency |
+|-----|---------|
+| WebRTC (มือถือ → Center) | ~200–500 ms |
+| RTSP → Janus → WebRTC | ~1 s |

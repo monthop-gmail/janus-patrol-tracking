@@ -1,0 +1,146 @@
+ขั้นตอนใช้งานจริงบน Linux (Ubuntu เป็นหลัก) ตั้งแต่ติดตั้ง Janus WebRTC Server จนถึง เปิดดูสตรีมผ่าน Web Browser 👌
+
+ผมจะแยกเป็น 3 ช่วง:
+
+ติดตั้ง Janus
+
+ส่งสตรีมเข้า Janus
+
+เปิดดูผ่าน Web Browser
+
+1) ติดตั้ง Janus บน Linux (Ubuntu 20.04 / 22.04)
+1.1 ติดตั้ง dependency
+sudo apt update
+sudo apt install -y \
+  git build-essential cmake \
+  libmicrohttpd-dev libjansson-dev \
+  libssl-dev libsrtp2-dev \
+  libsofia-sip-ua-dev libglib2.0-dev \
+  libopus-dev libogg-dev \
+  libcurl4-openssl-dev liblua5.3-dev \
+  libconfig-dev pkg-config gengetopt
+
+
+ถ้าจะใช้ WebRTC + H264
+
+sudo apt install -y libx264-dev
+
+1.2 ติดตั้ง libsrtp
+git clone https://github.com/cisco/libsrtp.git
+cd libsrtp
+./configure --enable-openssl
+make shared_library
+sudo make install
+
+1.3 ดาวน์โหลดและ build Janus
+cd ~
+git clone https://github.com/meetecho/janus-gateway.git
+cd janus-gateway
+sh autogen.sh
+./configure --enable-post-processing
+make
+sudo make install
+sudo make configs
+
+
+ตรวจสอบ
+
+janus --version
+
+2) เปิด Janus และรับ Streaming
+2.1 เปิด Janus server
+janus
+
+
+ค่า default:
+
+WebSocket: ws://IP:8188
+
+HTTP: http://IP:8088/janus
+
+ถ้าไม่ error แปลว่าใช้ได้ 👍
+
+3) วิธี Streaming เข้า Janus
+ทางเลือก A: ใช้ RTSP / RTMP → Janus (Streaming Plugin)
+
+เหมาะกับกล้อง CCTV / มือถือ
+
+แก้ไฟล์:
+
+sudo nano /usr/local/etc/janus/janus.plugin.streaming.jcfg
+
+
+ตัวอย่าง RTSP:
+
+streaming: {
+  rtsp-cam: {
+    type = "rtsp"
+    id = 1
+    description = "RTSP Camera"
+    audio = false
+    video = true
+    url = "rtsp://user:pass@IP:554/stream1"
+  }
+}
+
+
+รีสตาร์ท Janus
+
+ทางเลือก B: ส่งจากมือถือ (WebRTC / RTMP → FFmpeg → Janus)
+
+ตัวอย่าง FFmpeg:
+
+ffmpeg -re -i input.mp4 \
+  -c:v libx264 -preset veryfast -tune zerolatency \
+  -f rtp rtp://JANUS_IP:5004
+
+
+(ใช้คู่กับ rtp plugin)
+
+4) เปิดดู Streaming ผ่าน Web Browser 🌐
+4.1 ใช้หน้า Demo ของ Janus (ง่ายสุด)
+
+เปิด:
+
+http://JANUS_IP:8088/janus/demos/streaming.html
+
+
+กด Start
+
+เลือก Stream ID (เช่น 1)
+
+ดูภาพได้ทันที (WebRTC, latency ต่ำมาก)
+
+👉 ใช้ได้กับ Chrome / Edge / Firefox
+
+4.2 เปิดผ่าน WebSocket
+
+ถ้า Janus เปิดแบบ WS:
+
+http://JANUS_IP/janus/demos/streaming.html?ws=wss://JANUS_IP:8989
+
+5) โครงสร้างภาพรวม (เข้าใจง่าย)
+[ Mobile / CCTV ]
+       |
+   RTSP / WebRTC
+       |
+    [ Janus ]
+       |
+    WebRTC
+       |
+[ Web Browser ]
+
+
+Latency ปกติ:
+
+WebRTC: ~200–500 ms
+
+RTSP → Janus → WebRTC: ~1s
+
+6) ใช้งานร่วมกับ GPS มือถือ (ต่อยอดจากที่คุณถามก่อนหน้า)
+
+ส่ง GPS ผ่าน WebSocket / REST แยก channel
+
+แสดงตำแหน่งบนแผนที่ (Leaflet / Google Map)
+
+Sync กับ video stream (timestamp)

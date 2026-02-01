@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Patrol — Soldier</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; height: 100vh; }
+    #setup { display: flex; flex-direction: column; gap: 12px; padding: 24px; align-items: center; justify-content: center; flex: 1; }
+    #setup input { font-size: 18px; padding: 10px 16px; border-radius: 8px; border: 1px solid #555; background: #222; color: #fff; width: 260px; text-align: center; }
+    #setup button { font-size: 18px; padding: 12px 32px; border-radius: 8px; border: none; background: #2a7; color: #fff; cursor: pointer; }
+    #streaming { display: none; flex-direction: column; height: 100vh; }
+    video { flex: 1; background: #000; object-fit: cover; }
+    #status-bar { padding: 10px 16px; background: #1a1a1a; font-size: 14px; display: flex; justify-content: space-between; }
+    .online { color: #2a7; }
+    .offline { color: #a33; }
+  </style>
+</head>
+<body>
+
+<div id="setup">
+  <h2>ระบบลาดตระเวน</h2>
+  <input id="callsign" placeholder="Callsign (เช่น Alpha-1)" />
+  <input id="name" placeholder="ชื่อ (ไม่บังคับ)" />
+  <button onclick="startPatrol()">เริ่มส่งสัญญาณ</button>
+</div>
+
+<div id="streaming">
+  <video id="localVideo" autoplay playsinline muted></video>
+  <div id="status-bar">
+    <span id="gps-status">GPS: รอสัญญาณ...</span>
+    <span id="stream-status" class="offline">กำลังเชื่อมต่อ...</span>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const JANUS_WS = `ws://${location.hostname}:8188`;
+const JANUS_ROOM = 1234;
+
+let socket, janusWs, sessionId, handleId, myFeedId;
+let stream;
+
+async function startPatrol() {
+  const callsign = document.getElementById("callsign").value.trim();
+  if (!callsign) return alert("กรุณาใส่ Callsign");
+  const name = document.getElementById("name").value.trim();
+
+  document.getElementById("setup").style.display = "none";
+  document.getElementById("streaming").style.display = "flex";
+
+  // 1) เปิดกล้อง
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: true
+  });
+  document.getElementById("localVideo").srcObject = stream;
+
+  // 2) เชื่อมต่อ Socket.IO
+  socket = io();
+  socket.on("connect", () => {
+    socket.emit("soldier:join", { callsign, name });
+  });
+  socket.on("soldier:registered", (soldier) => {
+    console.log("registered", soldier);
+  });
+
+  // 3) GPS
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(
+      (pos) => {
+        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+        document.getElementById("gps-status").textContent =
+          `GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)} (±${Math.round(accuracy)}m)`;
+        socket.emit("soldier:gps", { lat, lng, accuracy });
+      },
+      (err) => {
+        document.getElementById("gps-status").textContent = `GPS: ${err.message}`;
+      },
+      { enableHighAccuracy: true, maximumAge: 3000 }
+    );
+  }
+
+  // 4) เชื่อมต่อ Janus VideoRoom (publisher)
+  connectJanus(callsign);
+}
+
+/* ====== Janus VideoRoom via WebSocket ====== */
+
+function connectJanus(displayName) {
+  janusWs = new WebSocket(JANUS_WS, "janus-protocol");
+  const txn = () => "txn" + Math.random().toString(36).slice(2);
+
+  janusWs.onopen = () => {
+    // สร้าง session
+    janusWs.send(JSON.stringify({ janus: "create", transaction: txn() }));
+  };
+
+  janusWs.onmessage = async (evt) => {
+    const msg = JSON.parse(evt.data);
+
+    // Session created
+    if (msg.janus === "success" && !sessionId) {
+      sessionId = msg.data.id;
+      // Attach videoroom plugin
+      janusWs.send(JSON.stringify({
+        janus: "attach", plugin: "janus.plugin.videoroom",
+        session_id: sessionId, transaction: txn()
+      }));
+      // Keepalive
+      setInterval(() => {
+        janusWs.send(JSON.stringify({ janus: "keepalive", session_id: sessionId, transaction: txn() }));
+      }, 25000);
+      return;
+    }
+
+    // Handle attached
+    if (msg.janus === "success" && msg.data && msg.data.id && !handleId) {
+      handleId = msg.data.id;
+      // Join room as publisher (create room if not exists)
+      janusWs.send(JSON.stringify({
+        janus: "message", session_id: sessionId, handle_id: handleId,
+        transaction: txn(),
+        body: { request: "join", room: JANUS_ROOM, ptype: "publisher", display: displayName }
+      }));
+      return;
+    }
+
+    // Room doesn't exist → create it then re-join
+    if (msg.janus === "event" && msg.plugindata?.data?.error_code === 426) {
+      janusWs.send(JSON.stringify({
+        janus: "message", session_id: sessionId, handle_id: handleId,
+        transaction: txn(),
+        body: { request: "create", room: JANUS_ROOM, publishers: 50, description: "Patrol Room" }
+      }));
+      setTimeout(() => {
+        janusWs.send(JSON.stringify({
+          janus: "message", session_id: sessionId, handle_id: handleId,
+          transaction: txn(),
+          body: { request: "join", room: JANUS_ROOM, ptype: "publisher", display: displayName }
+        }));
+      }, 500);
+      return;
+    }
+
+    // Joined → create offer
+    if (msg.janus === "event" && msg.plugindata?.data?.videoroom === "joined") {
+      myFeedId = msg.plugindata.data.id;
+      if (socket) socket.emit("soldier:feed", { feedId: myFeedId });
+
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: `turn:${location.hostname}:3478`, username: "janus", credential: "januspass" }
+        ]
+      });
+
+      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          janusWs.send(JSON.stringify({
+            janus: "trickle", session_id: sessionId, handle_id: handleId,
+            transaction: txn(), candidate: e.candidate
+          }));
+        } else {
+          janusWs.send(JSON.stringify({
+            janus: "trickle", session_id: sessionId, handle_id: handleId,
+            transaction: txn(), candidate: { completed: true }
+          }));
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      janusWs.send(JSON.stringify({
+        janus: "message", session_id: sessionId, handle_id: handleId,
+        transaction: txn(),
+        body: { request: "configure", audio: true, video: true },
+        jsep: { type: "offer", sdp: offer.sdp }
+      }));
+
+      // รอ answer
+      const waitAnswer = (e2) => {
+        const m2 = JSON.parse(e2.data);
+        if (m2.jsep && m2.jsep.type === "answer") {
+          pc.setRemoteDescription(m2.jsep);
+          document.getElementById("stream-status").textContent = "กำลังส่ง Live";
+          document.getElementById("stream-status").className = "online";
+          janusWs.removeEventListener("message", waitAnswer);
+        }
+      };
+      janusWs.addEventListener("message", waitAnswer);
+      return;
+    }
+  };
+
+  janusWs.onerror = (err) => console.error("Janus WS error", err);
+  janusWs.onclose = () => {
+    document.getElementById("stream-status").textContent = "ขาดการเชื่อมต่อ";
+    document.getElementById("stream-status").className = "offline";
+  };
+}
+</script>
+</body>
+</html>

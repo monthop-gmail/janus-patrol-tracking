@@ -1,0 +1,21 @@
+# Example RTSP stream — update url to your camera
+rtsp-cam: {
+  type = "rtsp"
+  id = 1
+  description = "RTSP Camera"
+  audio = false
+  video = true
+  url = "rtsp://user:pass@CAMERA_IP:554/stream1"
+}
+
+# Example RTP stream (for ffmpeg input)
+rtp-stream: {
+  type = "rtp"
+  id = 2
+  description = "RTP Stream"
+  audio = false
+  video = true
+  videoport = 5004
+  videopt = 96
+  videortpmap = "H264/90000"
+}
