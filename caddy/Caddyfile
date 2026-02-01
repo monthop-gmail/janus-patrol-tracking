@@ -1,25 +1,28 @@
-{$DOMAIN:localhost} {
-  # Static web client
-  root * /srv
-  file_server
-
-  # API proxy
+{$DOMAIN} {
   handle /api/* {
     reverse_proxy api:3000
   }
 
-  # Socket.IO proxy
   handle /socket.io/* {
     reverse_proxy api:3000
   }
 
-  # Janus HTTP API
-  handle /janus/* {
-    reverse_proxy {$JANUS_HOST:host.docker.internal}:8088
+  handle /janus* {
+    reverse_proxy {$JANUS_HOST}:8088
   }
 
-  # Janus WebSocket proxy
-  handle /ws {
-    reverse_proxy {$JANUS_HOST:host.docker.internal}:8188
+  @ws {
+    path /ws
+    header Connection *Upgrade*
+    header Upgrade websocket
+  }
+  handle @ws {
+    reverse_proxy {$JANUS_HOST}:8188
+  }
+
+  handle {
+    root * /srv
+    try_files {path} /center.html
+    file_server
   }
 }
