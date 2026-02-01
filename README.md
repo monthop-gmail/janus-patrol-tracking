@@ -18,8 +18,8 @@
 │                   Docker Compose                     │
 │                                                      │
 │  ┌────────┐ ┌────────┐ ┌──────┐ ┌────────┐ ┌──────┐ │
-│  │ Janus* │ │ API    │ │Nginx │ │Postgres│ │Coturn│ │
-│  │ :8188  │ │ :3000  │ │ :80  │ │ :5432  │ │:3478 │ │
+│  │ Janus* │ │ API    │ │Caddy │ │Postgres│ │Coturn│ │
+│  │ :8188  │ │ :3000  │ │:80/443│ │ :5432  │ │:3478 │ │
 │  └────────┘ └────────┘ └──────┘ └────────┘ └──────┘ │
 │  * host network                                      │
 └──────────────────────────────────────────────────────┘
@@ -35,33 +35,41 @@
 | **caddy** | `caddy:2-alpine` | Reverse proxy + auto HTTPS (Let's Encrypt) |
 | **coturn** | `coturn/coturn` | TURN server สำหรับ NAT traversal |
 
+## Demo
+
+**Production:** https://radsys-claude.sumana.org
+
 ## Quick Start
 
 ```bash
-# localhost (self-signed cert)
-docker compose up -d --build
+# 1. ตั้งค่า
+cp .env.example .env
+# แก้ DOMAIN เป็น domain จริง, JANUS_HOST เป็น IP จริงของ server
+# ห้ามใช้ host.docker.internal บน Linux — ใช้ IP จริงเท่านั้น
 
-# Production (ใส่ domain จริงเพื่อ auto HTTPS)
-DOMAIN=patrol.example.com docker compose up -d --build
+# 2. Start
+docker compose up -d --build
 ```
+
+> **หมายเหตุ:** เมื่อเปลี่ยน `.env` ต้องใช้ `docker compose up -d --force-recreate` ไม่ใช่แค่ `restart`
 
 ## หน้าเว็บ
 
 | URL | หน้าที่ |
 |-----|---------|
-| `http://localhost/` | ศูนย์บัญชาการ (center.html) |
-| `http://localhost/center.html` | แผนที่รวม + ดู live video ทหารแต่ละคน |
-| `http://localhost/soldier.html` | หน้าทหาร — ส่ง live video + GPS จากมือถือ |
+| `https://<DOMAIN>/` | ศูนย์บัญชาการ (center.html) |
+| `https://<DOMAIN>/center.html` | แผนที่รวม + ดู live video ทหารแต่ละคน |
+| `https://<DOMAIN>/soldier.html` | หน้าทหาร — ส่ง live video + GPS จากมือถือ |
 
 ## วิธีใช้งาน
 
 ### ทหาร (มือถือ)
-1. เปิด `http://<SERVER_IP>/soldier.html` บนมือถือ
+1. เปิด `https://<DOMAIN>/soldier.html` บนมือถือ
 2. ใส่ Callsign (เช่น Alpha-1) แล้วกด **เริ่มส่งสัญญาณ**
 3. อนุญาตกล้อง + GPS → ระบบจะส่ง live video และตำแหน่งอัตโนมัติ
 
 ### ศูนย์บัญชาการ
-1. เปิด `http://<SERVER_IP>/center.html`
+1. เปิด `https://<DOMAIN>/center.html`
 2. เห็น marker ทหารแต่ละคนบนแผนที่ (อัพเดท real-time)
 3. กดที่ marker → ดู live video ของทหารคนนั้น
 4. กด **แสดงเส้นทาง** → ดู track ย้อนหลังบนแผนที่
@@ -121,13 +129,14 @@ DOMAIN=patrol.example.com docker compose up -d --build
 
 ### Caddy (HTTPS)
 
-- **localhost**: ใช้ self-signed cert อัตโนมัติ
-- **Production**: ตั้ง `DOMAIN=patrol.example.com` ใน `.env` → Caddy จะขอ Let's Encrypt cert อัตโนมัติ
+- ตั้ง `DOMAIN` ใน `.env` → Caddy ขอ Let's Encrypt cert อัตโนมัติ
 - WebRTC บนมือถือ **ต้องใช้ HTTPS** (getUserMedia บังคับ secure context)
+- Caddyfile ใช้ `handle` blocks จัดลำดับ — proxy routes ต้องอยู่ก่อน file_server
 
 ### Janus Network
 
-Janus ใช้ `network_mode: host` เพื่อให้ ICE candidates เป็น host IP ตรงๆ (แก้ปัญหา ICE failed ใน Docker bridge network)
+- Janus ใช้ `network_mode: host` เพื่อให้ ICE candidates เป็น host IP ตรงๆ (แก้ปัญหา ICE failed ใน Docker bridge network)
+- `JANUS_HOST` ใน `.env` ต้องเป็น IP จริงของ server (`host.docker.internal` ใช้ได้แค่ Docker Desktop ไม่ใช่ Linux)
 
 ### ส่ง Stream ด้วย FFmpeg (เสริม)
 

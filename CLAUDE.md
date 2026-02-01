@@ -66,9 +66,24 @@ curl -X POST http://localhost:8088/janus -H "Content-Type: application/json" -d 
 - **Janus ใช้ `network_mode: host`** — จำเป็นเพื่อให้ ICE candidates เป็น host IP ตรงๆ ถ้าเปลี่ยนเป็น bridge network ต้องตั้ง `nat_1_1_mapping` ใน janus.jcfg
 - **ห้ามใส่ `ws_acl`** ใน janus.transport.websockets.jcfg — format เป็น prefix-based (`"127.,192."`) ไม่ใช่ CIDR ถ้าใส่ผิด Janus จะบล็อกทุก connection
 - **TURN credentials** ต้องตรงกัน 3 ที่: `coturn/turnserver.conf`, `janus/janus.jcfg`, และ iceServers ใน soldier.html + center.html (default: janus/januspass)
-- **Caddy** ใช้ env var `DOMAIN` (default: localhost) และ `JANUS_HOST` (default: host.docker.internal) — ตั้ง domain จริงเพื่อ auto HTTPS ผ่าน Let's Encrypt
+- **Caddy** ใช้ env var `DOMAIN` และ `JANUS_HOST` จาก `.env` — ทั้งสองต้องตั้งค่า (ไม่มี default)
+- **`JANUS_HOST` ต้องเป็น IP จริงของ server** — `host.docker.internal` ใช้ได้แค่ Docker Desktop ไม่ใช่ Linux
+- **เมื่อเปลี่ยน `.env` ต้อง `--force-recreate`** — ไม่ใช่แค่ `restart` (env ไม่อัพเดทถ้าแค่ restart)
 - WebRTC บนมือถือ **ต้องใช้ HTTPS** — Caddy จัดการ cert อัตโนมัติ
+- **Caddyfile ลำดับ `handle` สำคัญ** — proxy routes ต้องอยู่ก่อน file_server (ถ้าสลับ file_server จะดัก request ก่อน)
+- **`janus_feed` จาก DB เป็น string** — ต้อง `parseInt()` ก่อนส่ง Janus VideoRoom subscribe (Janus ต้องการ integer)
 - **PostgreSQL healthcheck** — api service จะ wait จนกว่า postgres healthy ก่อน start
+
+## Production Deploy
+
+```bash
+cp .env.example .env
+# แก้ DOMAIN=your.domain.com
+# แก้ JANUS_HOST=<server IP จริง>
+docker compose up -d --build
+```
+
+Production instance: `https://radsys-claude.sumana.org`
 
 ## Database Schema
 
