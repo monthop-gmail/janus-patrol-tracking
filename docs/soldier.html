@@ -36,7 +36,10 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-const JANUS_WS = `ws://${location.hostname}:8188`;
+const JANUS_WS_PROTO = location.protocol === "https:" ? "wss:" : "ws:";
+const JANUS_WS = location.protocol === "https:"
+  ? `${JANUS_WS_PROTO}//${location.host}/ws`
+  : `ws://${location.hostname}:8188`;
 const JANUS_ROOM = 1234;
 
 let socket, janusWs, sessionId, handleId, myFeedId;
@@ -152,7 +155,8 @@ function connectJanus(displayName) {
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
-          { urls: `turn:${location.hostname}:3478`, username: "janus", credential: "januspass" }
+          { urls: `turn:${location.hostname}:3478`, username: "janus", credential: "januspass" },
+          { urls: `turns:${location.hostname}:5349`, username: "janus", credential: "januspass" }
         ]
       });
 

@@ -39,16 +39,22 @@ services:
     networks:
       - janus-net
 
-  nginx:
-    image: nginx:alpine
+  caddy:
+    image: caddy:2-alpine
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - JANUS_HOST=${JANUS_HOST:-host.docker.internal}
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docs:/usr/share/nginx/html:ro
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./docs:/srv:ro
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
-      - janus
       - api
     networks:
       - janus-net
@@ -67,6 +73,8 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
 
 networks:
   janus-net:

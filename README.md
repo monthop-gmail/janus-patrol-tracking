@@ -32,13 +32,17 @@
 | **janus** | `canyan/janus-gateway` (host network) | WebRTC media server — VideoRoom plugin |
 | **api** | Node.js (Express + Socket.IO) | REST API + real-time GPS relay + บันทึกลง DB |
 | **postgres** | `postgres:16-alpine` | เก็บข้อมูลทหาร + GPS history ย้อนหลัง |
-| **nginx** | `nginx:alpine` | Serve web client + reverse proxy |
+| **caddy** | `caddy:2-alpine` | Reverse proxy + auto HTTPS (Let's Encrypt) |
 | **coturn** | `coturn/coturn` | TURN server สำหรับ NAT traversal |
 
 ## Quick Start
 
 ```bash
+# localhost (self-signed cert)
 docker compose up -d --build
+
+# Production (ใส่ domain จริงเพื่อ auto HTTPS)
+DOMAIN=patrol.example.com docker compose up -d --build
 ```
 
 ## หน้าเว็บ
@@ -94,8 +98,8 @@ docker compose up -d --build
 │   ├── janus.jcfg             # Config หลัก (NAT/TURN)
 │   ├── janus.transport.websockets.jcfg
 │   └── janus.plugin.streaming.jcfg
-├── nginx/
-│   └── nginx.conf             # Proxy: /api, /socket.io, /janus, /ws
+├── caddy/
+│   └── Caddyfile              # Reverse proxy + auto HTTPS
 ├── coturn/
 │   └── turnserver.conf
 └── docs/
@@ -114,6 +118,12 @@ docker compose up -d --build
 | Password | `januspass` |
 
 ต้องตรงกัน 3 ที่: `coturn/turnserver.conf`, `janus/janus.jcfg`, และ iceServers ใน HTML files
+
+### Caddy (HTTPS)
+
+- **localhost**: ใช้ self-signed cert อัตโนมัติ
+- **Production**: ตั้ง `DOMAIN=patrol.example.com` ใน `.env` → Caddy จะขอ Let's Encrypt cert อัตโนมัติ
+- WebRTC บนมือถือ **ต้องใช้ HTTPS** (getUserMedia บังคับ secure context)
 
 ### Janus Network
 

@@ -1,3 +1,5 @@
 node_modules/
 .env
 pgdata/
+caddy_data/
+caddy_config/

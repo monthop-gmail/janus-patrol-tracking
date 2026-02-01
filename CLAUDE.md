@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Janus Gateway** (host network) — WebRTC media routing via VideoRoom plugin, 1 shared room (ID 1234), soldiers = publishers, center = subscriber
 - **Node.js API** — Express + Socket.IO รับ GPS, จัดการ soldier sessions, บันทึกลง PostgreSQL
 - **PostgreSQL** — เก็บข้อมูลทหาร + GPS history ย้อนหลัง
-- **Nginx** — reverse proxy /api, /socket.io, /janus, /ws + serve static HTML
+- **Caddy** — reverse proxy /api, /socket.io, /janus, /ws + auto HTTPS (Let's Encrypt) + serve static HTML
 - **Coturn** — TURN server สำหรับ NAT traversal
 
 ## Commands
@@ -51,21 +51,23 @@ curl -X POST http://localhost:8088/janus -H "Content-Type: application/json" -d 
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | 5 services: janus (host network), api, postgres, nginx, coturn |
+| `docker-compose.yml` | 5 services: janus (host network), api, postgres, caddy, coturn |
 | `api/server.js` | REST API + Socket.IO server (GPS relay, soldier sessions) |
 | `api/db.js` | PostgreSQL pool + schema auto-init (soldiers, gps_logs tables) |
 | `docs/center.html` | ศูนย์บัญชาการ — Leaflet map + Janus VideoRoom subscriber |
 | `docs/soldier.html` | หน้าทหาร — camera + GPS + Janus VideoRoom publisher |
 | `janus/janus.jcfg` | Janus main config (NAT, TURN credentials, ICE port range) |
 | `janus/janus.transport.websockets.jcfg` | WebSocket on :8188 (ห้ามใส่ ws_acl) |
-| `nginx/nginx.conf` | Proxy rules: /api, /socket.io → api:3000; /janus, /ws → host Janus |
+| `caddy/Caddyfile` | Reverse proxy + auto HTTPS; ใช้ env DOMAIN และ JANUS_HOST |
+| `.env.example` | ตัวอย่าง env vars: DOMAIN, JANUS_HOST |
 
 ## Important Notes
 
 - **Janus ใช้ `network_mode: host`** — จำเป็นเพื่อให้ ICE candidates เป็น host IP ตรงๆ ถ้าเปลี่ยนเป็น bridge network ต้องตั้ง `nat_1_1_mapping` ใน janus.jcfg
 - **ห้ามใส่ `ws_acl`** ใน janus.transport.websockets.jcfg — format เป็น prefix-based (`"127.,192."`) ไม่ใช่ CIDR ถ้าใส่ผิด Janus จะบล็อกทุก connection
 - **TURN credentials** ต้องตรงกัน 3 ที่: `coturn/turnserver.conf`, `janus/janus.jcfg`, และ iceServers ใน soldier.html + center.html (default: janus/januspass)
-- **Nginx proxy** ชี้ไป `host.docker.internal` สำหรับ Janus เพราะ Janus ใช้ host network
+- **Caddy** ใช้ env var `DOMAIN` (default: localhost) และ `JANUS_HOST` (default: host.docker.internal) — ตั้ง domain จริงเพื่อ auto HTTPS ผ่าน Let's Encrypt
+- WebRTC บนมือถือ **ต้องใช้ HTTPS** — Caddy จัดการ cert อัตโนมัติ
 - **PostgreSQL healthcheck** — api service จะ wait จนกว่า postgres healthy ก่อน start
 
 ## Database Schema
@@ -77,7 +79,8 @@ curl -X POST http://localhost:8088/janus -H "Content-Type: application/json" -d 
 
 | Port | Service |
 |------|---------|
-| 80 | Nginx (web + proxy) |
+| 80 | Caddy HTTP (→ redirect HTTPS) |
+| 443 | Caddy HTTPS (web + proxy) |
 | 8088 | Janus HTTP API (host) |
 | 8188 | Janus WebSocket (host) |
 | 3478 | Coturn TURN |
