@@ -196,6 +196,7 @@ function cleanupSubscriber() {
 }
 
 function subscribeToFeed(feedId) {
+  feedId = parseInt(feedId);
   cleanupSubscriber();
   subWs = new WebSocket(JANUS_WS, "janus-protocol");
   const txn = () => "t" + Math.random().toString(36).slice(2);

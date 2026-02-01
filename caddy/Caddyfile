@@ -11,12 +11,7 @@
     reverse_proxy {$JANUS_HOST}:8088
   }
 
-  @ws {
-    path /ws
-    header Connection *Upgrade*
-    header Upgrade websocket
-  }
-  handle @ws {
+  handle /ws {
     reverse_proxy {$JANUS_HOST}:8188
   }
 
